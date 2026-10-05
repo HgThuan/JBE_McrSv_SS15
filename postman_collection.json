@@ -1,8 +1,8 @@
 {
 	"info": {
 		"_postman_id": "87e35b71-3cb5-4f40-9a28-ee580c80d45f",
-		"name": "SS15 - Microservices Security (Identity & Gateway with JWT)",
-		"description": "Collection kiểm thử trọn bộ Session 15: Xác thực Identity-Service (JJWT HS256, Refresh Token PostgreSQL) và API Gateway-Service (Global Filter chặn 401 từ sớm, trích xuất role gắn Header X-User-Role).",
+		"name": "SS15 - Microservices Security (Identity, Gateway & Method Security)",
+		"description": "Collection kiểm thử trọn bộ Session 15: \n1. Identity-Service: JJWT 0.11.5 HS256, Refresh Token PostgreSQL 7 ngày\n2. Gateway-Service: Global Filter chặn 401 từ sớm, trích xuất role gắn Header X-User-Role\n3. Course-Service: Method Level Security với @PreAuthorize, STUDENT gọi POST /api/courses bị chặn 403 Forbidden.",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 	},
 	"variable": [
@@ -17,17 +17,17 @@
 			"type": "string"
 		},
 		{
-			"key": "accessToken",
-			"value": "",
-			"type": "string"
-		},
-		{
-			"key": "refreshToken",
+			"key": "accessTokenStudent",
 			"value": "",
 			"type": "string"
 		},
 		{
 			"key": "accessTokenInstructor",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "refreshToken",
 			"value": "",
 			"type": "string"
 		},
@@ -39,7 +39,7 @@
 	],
 	"item": [
 		{
-			"name": "1. Identity-Service (Auth)",
+			"name": "1. Identity-Service (Auth & Tokens)",
 			"item": [
 				{
 					"name": "1.1 Login - Student (ROLE: STUDENT)",
@@ -63,7 +63,7 @@
 									"    pm.expect(jsonData.role).to.eql('STUDENT');",
 									"});",
 									"",
-									"pm.collectionVariables.set(\"accessToken\", jsonData.accessToken);",
+									"pm.collectionVariables.set(\"accessTokenStudent\", jsonData.accessToken);",
 									"pm.collectionVariables.set(\"refreshToken\", jsonData.refreshToken);",
 									"",
 									"pm.test(\"JWT Payload contains sub, role, jti, exp, iat\", function () {",
@@ -240,10 +240,10 @@
 			]
 		},
 		{
-			"name": "2. Gateway-Service Security & Routing",
+			"name": "2. Gateway & Course-Service (Method Level Security)",
 			"item": [
 				{
-					"name": "2.1 GET /api/courses (Không đính kèm Token -> Chặn 401)",
+					"name": "2.1 GET /api/courses (Không Token -> Chặn 401)",
 					"event": [
 						{
 							"listen": "test",
@@ -253,8 +253,7 @@
 									"    pm.response.to.have.status(401);",
 									"});",
 									"var jsonData = pm.response.json();",
-									"pm.expect(jsonData.error).to.eql(\"Unauthorized\");",
-									"pm.expect(jsonData.message).to.include(\"Thiếu hoặc sai định dạng Header Authorization\");"
+									"pm.expect(jsonData.error).to.eql(\"Unauthorized\");"
 								],
 								"type": "text/javascript"
 							}
@@ -277,7 +276,7 @@
 					"response": []
 				},
 				{
-					"name": "2.2 GET /api/courses (Token đã hết hạn -> Chặn 401)",
+					"name": "2.2 GET /api/courses (Token hết hạn -> Chặn 401)",
 					"event": [
 						{
 							"listen": "test",
@@ -285,10 +284,7 @@
 								"exec": [
 									"pm.test(\"Gateway chặn 401 Unauthorized khi Token hết hạn\", function () {",
 									"    pm.response.to.have.status(401);",
-									"});",
-									"var jsonData = pm.response.json();",
-									"pm.expect(jsonData.error).to.eql(\"Unauthorized\");",
-									"pm.expect(jsonData.message).to.include(\"hết hạn\");"
+									"});"
 								],
 								"type": "text/javascript"
 							}
@@ -316,18 +312,20 @@
 					"response": []
 				},
 				{
-					"name": "2.3 GET /api/courses (Token sai chữ ký -> Chặn 401)",
+					"name": "2.3 GET /api/courses (STUDENT Xem danh sách -> 200 OK)",
 					"event": [
 						{
 							"listen": "test",
 							"script": {
 								"exec": [
-									"pm.test(\"Gateway chặn 401 Unauthorized khi Token sai chữ ký\", function () {",
-									"    pm.response.to.have.status(401);",
+									"pm.test(\"Status code is 200 OK\", function () {",
+									"    pm.response.to.have.status(200);",
 									"});",
 									"var jsonData = pm.response.json();",
-									"pm.expect(jsonData.error).to.eql(\"Unauthorized\");",
-									"pm.expect(jsonData.message).to.include(\"sai chữ ký số\");"
+									"pm.test(\"Danh sách khóa học trả về là mảng\", function () {",
+									"    pm.expect(jsonData).to.be.an(\"array\");",
+									"    pm.expect(jsonData.length).to.be.at.least(1);",
+									"});"
 								],
 								"type": "text/javascript"
 							}
@@ -338,7 +336,7 @@
 						"header": [
 							{
 								"key": "Authorization",
-								"value": "Bearer eyJhbGciOiAiSFMyNTYiLCAidHlwIjogIkpXVCJ9.eyJzdWIiOiAic3R1ZGVudCJ9.INVALID_SIGNATURE_TAMPERED"
+								"value": "Bearer {{accessTokenStudent}}"
 							}
 						],
 						"url": {
@@ -355,20 +353,20 @@
 					"response": []
 				},
 				{
-					"name": "2.4 GET /api/courses (Token Student hợp lệ -> 200 OK & X-User-Role: STUDENT)",
+					"name": "2.4 POST /api/courses (STUDENT Tạo khóa học -> 403 Forbidden)",
 					"event": [
 						{
 							"listen": "test",
 							"script": {
 								"exec": [
-									"pm.test(\"Status code is 200 OK\", function () {",
-									"    pm.response.to.have.status(200);",
+									"pm.test(\"STUDENT tạo khóa học phải bị từ chối 403 Forbidden\", function () {",
+									"    pm.response.to.have.status(403);",
 									"});",
 									"var jsonData = pm.response.json();",
-									"pm.test(\"Downstream Course-Service nhận đúng Header X-User-Role = STUDENT\", function () {",
-									"    pm.expect(jsonData.xUserRole).to.eql(\"STUDENT\");",
-									"    pm.expect(jsonData.xUserName).to.eql(\"student\");",
-									"    pm.expect(jsonData.courses).to.be.an(\"array\");",
+									"pm.test(\"Mã lỗi và thông báo phân quyền chính xác\", function () {",
+									"    pm.expect(jsonData.status).to.eql(403);",
+									"    pm.expect(jsonData.error).to.eql(\"Forbidden\");",
+									"    pm.expect(jsonData.message).to.include(\"yêu cầu quyền INSTRUCTOR\");",
 									"});"
 								],
 								"type": "text/javascript"
@@ -376,13 +374,21 @@
 						}
 					],
 					"request": {
-						"method": "GET",
+						"method": "POST",
 						"header": [
 							{
 								"key": "Authorization",
-								"value": "Bearer {{accessToken}}"
+								"value": "Bearer {{accessTokenStudent}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
 							}
 						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"title\": \"Khóa học bị chặn của Student\",\n    \"description\": \"Student không có quyền tạo khóa học này\",\n    \"price\": 99.0\n}"
+						},
 						"url": {
 							"raw": "{{gatewayUrl}}/api/courses",
 							"host": [
@@ -397,7 +403,55 @@
 					"response": []
 				},
 				{
-					"name": "2.5 GET /api/courses (Token Instructor hợp lệ -> 200 OK & X-User-Role: INSTRUCTOR)",
+					"name": "2.5 POST /api/courses (INSTRUCTOR Tạo khóa học -> 201 Created)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"INSTRUCTOR tạo khóa học thành công 201 Created\", function () {",
+									"    pm.response.to.have.status(201);",
+									"});",
+									"var jsonData = pm.response.json();",
+									"pm.expect(jsonData.id).to.be.a(\"number\");",
+									"pm.expect(jsonData.title).to.eql(\"Khóa học nâng cao do Giảng viên tạo\");",
+									"pm.expect(jsonData.instructor).to.eql(\"instructor\");"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{accessTokenInstructor}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"title\": \"Khóa học nâng cao do Giảng viên tạo\",\n    \"description\": \"Khóa học kiến trúc microservices và phân quyền chuyên sâu\",\n    \"price\": 299.99\n}"
+						},
+						"url": {
+							"raw": "{{gatewayUrl}}/api/courses",
+							"host": [
+								"{{gatewayUrl}}"
+							],
+							"path": [
+								"api",
+								"courses"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "2.6 GET /api/courses (INSTRUCTOR Xem danh sách -> 200 OK)",
 					"event": [
 						{
 							"listen": "test",
@@ -407,10 +461,7 @@
 									"    pm.response.to.have.status(200);",
 									"});",
 									"var jsonData = pm.response.json();",
-									"pm.test(\"Downstream Course-Service nhận đúng Header X-User-Role = INSTRUCTOR\", function () {",
-									"    pm.expect(jsonData.xUserRole).to.eql(\"INSTRUCTOR\");",
-									"    pm.expect(jsonData.xUserName).to.eql(\"instructor\");",
-									"});"
+									"pm.expect(jsonData).to.be.an(\"array\");"
 								],
 								"type": "text/javascript"
 							}

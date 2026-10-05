@@ -1,21 +1,28 @@
-# Session 15: Kiến Trúc Microservices Security - Identity-Service & Gateway-Service
+# Session 15: Kiến Trúc Microservices Security - Phân Quyền Đa Tầng (Identity, Gateway & Course-Service)
 
-Dự án triển khai mô hình kiến trúc bảo mật tập trung cho Microservices bao gồm:
+Dự án triển khai mô hình bảo mật và phân quyền toàn diện cho kiến trúc Microservices gồm 3 dịch vụ:
+
 1. **Identity-Service (Port 8085)**:
    - Sử dụng **Spring Security 6** và **JJWT 0.11.5**.
-   - Xác thực mật khẩu đã băm **BCrypt** trong cơ sở dữ liệu **PostgreSQL**.
-   - Cấp **Access Token** ngắn hạn (15 phút, thuật toán **HS256**) với payload chứa đầy đủ standard claim `sub`, private claim `role` (`STUDENT`, `INSTRUCTOR`, `ADMIN`) và bắt buộc claim `jti` (JWT ID dạng UUID).
-   - Cấp **Refresh Token** dài hạn (chuỗi ngẫu nhiên UUID, sống 7 ngày) lưu vào bảng `refresh_tokens`.
+   - Thẩm định mật khẩu đã băm **BCrypt** trong database **PostgreSQL**.
+   - Cấp **Access Token** ngắn hạn (15 phút, thuật toán **HS256**) với payload chứa standard claim `sub`, private claim `role` (`STUDENT`, `INSTRUCTOR`, `ADMIN`) và bắt buộc claim `jti` (UUID duy nhất).
+   - Cấp **Refresh Token** dài hạn (chuỗi ngẫu nhiên UUID, sống 7 ngày) lưu trữ trong bảng `refresh_tokens`.
+
 2. **Gateway-Service (Port 8088)**:
-   - Sử dụng **Spring Cloud Gateway** (Reactive WebFlux) và thư viện **JJWT 0.11.5**.
+   - Sử dụng **Spring Cloud Gateway (Reactive WebFlux)** và **JJWT 0.11.5**.
    - Định tuyến `/api/courses/**` xuống **Course-Service** (Port 8087) và `/api/auth/**` xuống **Identity-Service** (Port 8085).
    - **Global Filter** (`JwtAuthenticationGlobalFilter`):
-     - Dùng chung Secret Key với Identity-Service để thẩm định JWT từ header `Authorization: Bearer <token>`.
-     - Chặn từ sớm với mã **401 Unauthorized** nếu: không có Token, Token đã hết hạn, sai chữ ký, hoặc sai định dạng.
+     - Dùng chung Secret Key với Identity-Service để thẩm định Access Token từ Header `Authorization: Bearer <token>`.
+     - **Chặn từ sớm với mã 401 Unauthorized** nếu: không có Token, Token hết hạn, sai chữ ký, hoặc sai định dạng.
      - Nếu Token hợp lệ: trích xuất claim `role` từ Payload và gắn vào Header mới `X-User-Role` trước khi forward request xuống **Course-Service**.
+
 3. **Course-Service (Port 8087)**:
-   - Dịch vụ downstream cung cấp tài nguyên khóa học `/api/courses`.
-   - Đọc Header `X-User-Role` và `X-User-Name` do Gateway chuyển tiếp tới để nhận biết vai trò của người dùng.
+   - **Method Level Security**: Phân quyền dựa trên Header `X-User-Role` do Gateway truyền xuống mà **KHÔNG** cần nhúng thư viện giải mã lại JWT.
+   - **Database: KHÔNG**: Quản lý dữ liệu bằng danh sách tĩnh trong bộ nhớ (`Java In-Memory List`).
+   - Phân quyền phương thức với `@PreAuthorize`:
+     - `GET /api/courses`: `@PreAuthorize("hasAuthority('STUDENT') or hasAuthority('INSTRUCTOR')")` $\rightarrow$ Cho phép cả học viên và giảng viên xem danh sách khóa học.
+     - `POST /api/courses`: `@PreAuthorize("hasAuthority('INSTRUCTOR')")` $\rightarrow$ **Chỉ cho phép giảng viên tạo khóa học**.
+   - Khi tài khoản `STUDENT` cố gắng gọi `POST /api/courses` qua Gateway $\rightarrow$ Trả về mã lỗi **403 Forbidden**.
 
 ---
 
@@ -24,8 +31,8 @@ Dự án triển khai mô hình kiến trúc bảo mật tập trung cho Microse
 ```text
 SS15/
 ├── docker-compose.yml              # Khởi động PostgreSQL 16 (port 5433, db identity_db)
-├── pom.xml                         # Parent POM quản lý cả 3 services
-├── postman_collection.json         # Toàn bộ kịch bản test Identity & Gateway
+├── pom.xml                         # Parent POM điều phối build cả 3 services
+├── postman_collection.json         # Kịch bản kiểm thử Postman tự động cho cả 3 services
 ├── README.md                       # Hướng dẫn chi tiết
 ├── identity-service/               # Cấp Token & Quản lý User (Port 8085)
 │   ├── pom.xml
@@ -44,11 +51,17 @@ SS15/
 │       │   ├── GatewayServiceApplication.java
 │       │   └── filter/JwtAuthenticationGlobalFilter.java  # Global Filter kiểm tra JWT & gán X-User-Role
 │       └── test/... (5 test cases)
-└── course-service/                 # Downstream Service (Port 8087)
-    ├── pom.xml
+└── course-service/                 # Downstream Service có Method Security (Port 8087)
+    ├── pom.xml                     # spring-boot-starter-web, spring-boot-starter-security
     └── src/
-        ├── main/java/com/course/controller/CourseController.java (Đọc X-User-Role)
-        └── test/...
+        ├── main/java/com/course/
+        │   ├── model/ (Course.java, CourseRequest.java)
+        │   ├── security/
+        │   │   ├── HeaderAuthenticationFilter.java        # Đọc Header X-User-Role gán Authority
+        │   │   ├── CustomAccessDeniedHandler.java         # Bắt lỗi 403 Forbidden trả về JSON
+        │   │   └── SecurityConfig.java                    # @EnableMethodSecurity(prePostEnabled=true)
+        │   └── controller/CourseController.java           # @PreAuthorize trên GET và POST
+        └── test/... (5 test cases)
 ```
 
 ---
@@ -59,8 +72,8 @@ SS15/
 | :--- | :--- | :--- |
 | **PostgreSQL** | `5433` | Cơ sở dữ liệu cho Identity-Service (`identity_db`) |
 | **Identity-Service** | `8085` | Xác thực đăng nhập & cấp phát Access/Refresh Token |
-| **Course-Service** | `8087` | Dịch vụ khóa học (Downstream) |
-| **Gateway-Service** | `8088` | Điểm truy cập API trung tâm & Thẩm định JWT |
+| **Course-Service** | `8087` | Quản lý khóa học, phân quyền Method Security `@PreAuthorize` |
+| **Gateway-Service** | `8088` | Điểm truy cập API tập trung, thẩm định JWT & chuyển tiếp Header |
 
 ---
 
@@ -72,8 +85,6 @@ docker compose up -d
 ```
 
 ### 3.2 Khởi động các Microservices
-Mở 3 terminal riêng hoặc chạy ngầm:
-
 1. **Khởi chạy Identity-Service**:
    ```bash
    cd identity-service
@@ -90,76 +101,48 @@ Mở 3 terminal riêng hoặc chạy ngầm:
    mvn spring-boot:run
    ```
 
-### 3.3 Chạy Bộ Test Tự Động Toàn Dự Án
+### 3.3 Chạy Toàn Bộ Test Suite Tự Động
 Từ thư mục gốc `SS15`:
 ```bash
 mvn clean test
 ```
-Tất cả các bài kiểm thử của cả 3 services sẽ chạy và đều đạt trạng thái `SUCCESS`.
+Tất cả **15 test cases** của cả 3 services sẽ chạy và đều đạt trạng thái `SUCCESS`.
 
 ---
 
 ## 4. Hướng Dẫn Kiểm Thử Với Postman
 
-Import file [`postman_collection.json`](postman_collection.json) vào Postman. Collection gồm 2 thư mục:
+Import file [`postman_collection.json`](postman_collection.json) vào Postman:
 
-### Thư mục 1: `1. Identity-Service (Auth)`
-- `1.1 Login - Student`: Đăng nhập `student` / `password123`. Trả về `accessToken` và `refreshToken`. Tự động lưu `accessToken` vào biến collection.
-- `1.2 Login - Instructor`: Đăng nhập `instructor` / `password123`. Lưu `accessTokenInstructor`.
-- `1.3 Login - Sai mật khẩu`: Nhận mã `401 Unauthorized`.
-- `1.4 Refresh Token`: Đổi `refreshToken` lấy cặp token mới.
-
-### Thư mục 2: `2. Gateway-Service Security & Routing`
-- `2.1 GET /api/courses (Không đính kèm Token)`:
-  - **Kết quả mong đợi**: Gateway chặn ngay lập tức với mã `401 Unauthorized`.
-  - **Response body**:
-    ```json
-    {
-      "status": 401,
-      "error": "Unauthorized",
-      "message": "Thiếu hoặc sai định dạng Header Authorization Bearer Token!",
-      "path": "/api/courses"
-    }
-    ```
-- `2.2 GET /api/courses (Token đã hết hạn)`:
-  - **Kết quả mong đợi**: Gateway chặn ngay với mã `401 Unauthorized` ("Access Token đã hết hạn! Vui lòng đăng nhập lại.").
-- `2.3 GET /api/courses (Token sai chữ ký)`:
-  - **Kết quả mong đợi**: Gateway chặn ngay với mã `401 Unauthorized` ("Access Token sai chữ ký số!").
-- `2.4 GET /api/courses (Student Token hợp lệ)`:
-  - Header: `Authorization: Bearer {{accessToken}}`
-  - **Kết quả mong đợi**: Mã `200 OK`.
-  - **Response body**:
-    ```json
-    {
-      "courses": [ ... ],
-      "xUserRole": "STUDENT",
-      "xUserName": "student",
-      "totalCourses": 3,
-      "message": "Lấy danh sách khóa học thành công từ Course-Service!"
-    }
-    ```
-- `2.5 GET /api/courses (Instructor Token hợp lệ)`:
-  - Header: `Authorization: Bearer {{accessTokenInstructor}}`
-  - **Kết quả mong đợi**: Mã `200 OK`, `xUserRole: "INSTRUCTOR"`.
-
----
-
-## 5. Kiểm Thử Trực Quan Trên jwt.io
-
-Dán `accessToken` vào [https://jwt.io](https://jwt.io):
-- **Header**:
-  ```json
-  { "alg": "HS256" }
-  ```
-- **Payload**:
-  ```json
-  {
-    "sub": "student",
-    "role": "STUDENT",
-    "jti": "3871145f-d08d-4793-84e2-8255f7203538",
-    "iat": 1791169212,
-    "exp": 1791170112
-  }
-  ```
-- Thời gian sống `exp - iat = 900 giây` (**15 phút**).
-- Claim `role` được Gateway đọc và truyền tiếp xuống downstream qua `X-User-Role`.
+### 4.1 Quy trình kiểm thử lỗi 403 Forbidden theo yêu cầu
+1. Chạy request **1.1 Login - Student**:
+   - `POST {{gatewayUrl}}/api/auth/login` với `student` / `password123`.
+   - Postman sẽ tự động lưu `accessTokenStudent`.
+2. Chạy request **2.3 GET /api/courses (STUDENT xem danh sách)**:
+   - Header: `Authorization: Bearer {{accessTokenStudent}}`
+   - **Kết quả**: Mã `200 OK`, trả về danh sách khóa học.
+3. Chạy request **2.4 POST /api/courses (STUDENT tạo khóa học)**:
+   - Header: `Authorization: Bearer {{accessTokenStudent}}`
+   - Body:
+     ```json
+     {
+       "title": "Khóa học bị chặn của Student",
+       "description": "Student không có quyền tạo khóa học này",
+       "price": 99.0
+     }
+     ```
+   - **Kết quả thực tế**: Mã lỗi **403 Forbidden**:
+     ```json
+     {
+       "status": 403,
+       "error": "Forbidden",
+       "message": "Bạn không có quyền thực hiện thao tác này! Thao tác yêu cầu quyền INSTRUCTOR.",
+       "path": "/api/courses"
+     }
+     ```
+4. Chạy request **1.2 Login - Instructor**:
+   - `POST {{gatewayUrl}}/api/auth/login` với `instructor` / `password123`.
+   - Postman tự động lưu `accessTokenInstructor`.
+5. Chạy request **2.5 POST /api/courses (INSTRUCTOR tạo khóa học)**:
+   - Header: `Authorization: Bearer {{accessTokenInstructor}}`
+   - **Kết quả**: Mã **201 Created**, khóa học mới được thêm vào danh sách thành công.
