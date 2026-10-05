@@ -1,0 +1,21 @@
+server:
+  port: 8088
+
+spring:
+  application:
+    name: gateway-service
+  cloud:
+    gateway:
+      routes:
+        - id: course-service
+          uri: http://${COURSE_SERVICE_HOST:localhost}:8087
+          predicates:
+            - Path=/api/courses/**
+        - id: identity-service
+          uri: http://${IDENTITY_SERVICE_HOST:localhost}:8085
+          predicates:
+            - Path=/api/auth/**
+
+app:
+  jwt:
+    secret: "vS6K5vH8N2zB4xR9mQ3pL1wT7yC5vH8N2zB4xR9mQ3pL1wT7yC5vH8N2z"

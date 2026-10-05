@@ -1,229 +1,165 @@
-# Session 15: Xác Thực Người Dùng với Spring Security & JJWT (Identity-Service)
+# Session 15: Kiến Trúc Microservices Security - Identity-Service & Gateway-Service
 
-Dự án triển khai dịch vụ **Identity-Service** áp dụng **Spring Security 6**, thư viện **JJWT 0.11.5**, và cơ sở dữ liệu **PostgreSQL** để:
-- Kiểm chứng danh tính người dùng bằng thuật toán băm mật khẩu **BCrypt**.
-- Cấp **Access Token** ngắn hạn (15 phút, thuật toán **HS256**) với payload chứa các claim:
-  - Standard claim `sub`: Username của người dùng.
-  - Private claim `role`: Vai trò của người dùng (ví dụ: `STUDENT`, `INSTRUCTOR`, `ADMIN`).
-  - Bắt buộc claim `jti`: JWT ID - mã định danh duy nhất của token (chuỗi UUID).
-  - Standard claim `iat` (thời điểm cấp) và `exp` (thời điểm hết hạn sau 15 phút).
-- Cấp **Refresh Token** dài hạn (chuỗi ngẫu nhiên UUID, sống 7 ngày) và lưu trữ thông tin vào bảng `refresh_tokens` trong database PostgreSQL.
-- Quản lý phiên **Stateless** và tắt **CSRF**, mở quyền truy cập `permitAll()` cho endpoint đăng nhập `/api/auth/login`.
+Dự án triển khai mô hình kiến trúc bảo mật tập trung cho Microservices bao gồm:
+1. **Identity-Service (Port 8085)**:
+   - Sử dụng **Spring Security 6** và **JJWT 0.11.5**.
+   - Xác thực mật khẩu đã băm **BCrypt** trong cơ sở dữ liệu **PostgreSQL**.
+   - Cấp **Access Token** ngắn hạn (15 phút, thuật toán **HS256**) với payload chứa đầy đủ standard claim `sub`, private claim `role` (`STUDENT`, `INSTRUCTOR`, `ADMIN`) và bắt buộc claim `jti` (JWT ID dạng UUID).
+   - Cấp **Refresh Token** dài hạn (chuỗi ngẫu nhiên UUID, sống 7 ngày) lưu vào bảng `refresh_tokens`.
+2. **Gateway-Service (Port 8088)**:
+   - Sử dụng **Spring Cloud Gateway** (Reactive WebFlux) và thư viện **JJWT 0.11.5**.
+   - Định tuyến `/api/courses/**` xuống **Course-Service** (Port 8087) và `/api/auth/**` xuống **Identity-Service** (Port 8085).
+   - **Global Filter** (`JwtAuthenticationGlobalFilter`):
+     - Dùng chung Secret Key với Identity-Service để thẩm định JWT từ header `Authorization: Bearer <token>`.
+     - Chặn từ sớm với mã **401 Unauthorized** nếu: không có Token, Token đã hết hạn, sai chữ ký, hoặc sai định dạng.
+     - Nếu Token hợp lệ: trích xuất claim `role` từ Payload và gắn vào Header mới `X-User-Role` trước khi forward request xuống **Course-Service**.
+3. **Course-Service (Port 8087)**:
+   - Dịch vụ downstream cung cấp tài nguyên khóa học `/api/courses`.
+   - Đọc Header `X-User-Role` và `X-User-Name` do Gateway chuyển tiếp tới để nhận biết vai trò của người dùng.
 
 ---
 
-## 1. Cấu Trúc Dự Án (Project Structure)
+## 1. Cấu Trúc Toàn Bộ Dự Án
 
 ```text
 SS15/
 ├── docker-compose.yml              # Khởi động PostgreSQL 16 (port 5433, db identity_db)
-├── pom.xml                         # Parent POM điều phối toàn bộ build
-├── postman_collection.json         # Postman Collection với kịch bản test và test script tự động
-├── README.md                       # Hướng dẫn chi tiết vận hành và kiểm thử
-└── identity-service/
-    ├── pom.xml                     # Web, JPA, Security, PostgreSQL, JJWT 0.11.5
+├── pom.xml                         # Parent POM quản lý cả 3 services
+├── postman_collection.json         # Toàn bộ kịch bản test Identity & Gateway
+├── README.md                       # Hướng dẫn chi tiết
+├── identity-service/               # Cấp Token & Quản lý User (Port 8085)
+│   ├── pom.xml
+│   └── src/
+│       ├── main/java/com/identity/
+│       │   ├── config/DataInitializer.java         # Nạp sẵn tài khoản student, instructor, admin
+│       │   ├── controller/AuthController.java      # POST /api/auth/login & refresh
+│       │   ├── model/ (User.java, RefreshToken.java)
+│       │   ├── security/jwt/JwtUtils.java          # JJWT 0.11.5 (HS256, 15m, sub, role, jti)
+│       │   └── security/WebSecurityConfig.java     # CSRF disabled, Stateless, permitAll
+│       └── test/... (5 test cases)
+├── gateway-service/                # API Gateway chặn 401 & Forward Header (Port 8088)
+│   ├── pom.xml                     # spring-cloud-starter-gateway, jjwt 0.11.5
+│   └── src/
+│       ├── main/java/com/gateway/
+│       │   ├── GatewayServiceApplication.java
+│       │   └── filter/JwtAuthenticationGlobalFilter.java  # Global Filter kiểm tra JWT & gán X-User-Role
+│       └── test/... (5 test cases)
+└── course-service/                 # Downstream Service (Port 8087)
+    ├── pom.xml
     └── src/
-        ├── main/
-        │   ├── java/com/identity/
-        │   │   ├── IdentityServiceApplication.java
-        │   │   ├── config/
-        │   │   │   └── DataInitializer.java        # Tự động nạp sẵn tài khoản mẫu student, instructor
-        │   │   ├── controller/
-        │   │   │   └── AuthController.java         # Endpoint POST /api/auth/login & refresh
-        │   │   ├── dto/
-        │   │   │   ├── request/LoginRequest.java
-        │   │   │   ├── request/TokenRefreshRequest.java
-        │   │   │   └── response/TokenResponse.java
-        │   │   ├── exception/
-        │   │   │   └── GlobalExceptionHandler.java # Bắt lỗi 401 Unauthorized, 400 Bad Request
-        │   │   ├── model/
-        │   │   │   ├── User.java                   # Entity users & user_roles
-        │   │   │   └── RefreshToken.java           # Entity refresh_tokens
-        │   │   ├── repository/
-        │   │   │   ├── UserRepository.java
-        │   │   │   └── RefreshTokenRepository.java
-        │   │   └── security/
-        │   │       ├── WebSecurityConfig.java      # Tắt CSRF, Stateless, permitAll /api/auth/**
-        │   │       ├── jwt/
-        │   │       │   ├── JwtUtils.java           # Sinh & thẩm định JWT HS256, sub, role, jti
-        │   │       │   └── AuthEntryPointJwt.java  # Xử lý phản hồi lỗi xác thực 401 JSON
-        │   │       └── services/
-        │   │           ├── RefreshTokenService.java # Sinh Refresh Token 7 ngày & lưu DB
-        │   │           ├── UserDetailsImpl.java
-        │   │           └── UserDetailsServiceImpl.java
-        │   └── resources/
-        │       └── application.yml
-        └── test/
-            ├── java/com/identity/
-            │   └── IdentityServiceApplicationTests.java # 5 bài kiểm thử tự động
-            └── resources/
-                └── application-test.yml
+        ├── main/java/com/course/controller/CourseController.java (Đọc X-User-Role)
+        └── test/...
 ```
 
 ---
 
-## 2. Các Tài Khoản Mẫu Được Khởi Tạo Tự Động
+## 2. Các Cổng Dịch Vụ (Service Ports)
 
-Khi khởi động service, `DataInitializer` sẽ kiểm tra và khởi tạo sẵn các tài khoản sau (mật khẩu đã băm bằng **BCrypt**):
-
-| Username | Password | Email | Role trong JWT (`role`) |
-| :--- | :--- | :--- | :--- |
-| `student` | `password123` | `student@example.com` | `STUDENT` |
-| `instructor` | `password123` | `instructor@example.com` | `INSTRUCTOR` |
-| `admin` | `password123` | `admin@example.com` | `ADMIN` |
-| `user` | `password123` | `user@example.com` | `STUDENT` |
+| Service | Cổng (Port) | Mô tả |
+| :--- | :--- | :--- |
+| **PostgreSQL** | `5433` | Cơ sở dữ liệu cho Identity-Service (`identity_db`) |
+| **Identity-Service** | `8085` | Xác thực đăng nhập & cấp phát Access/Refresh Token |
+| **Course-Service** | `8087` | Dịch vụ khóa học (Downstream) |
+| **Gateway-Service** | `8088` | Điểm truy cập API trung tâm & Thẩm định JWT |
 
 ---
 
-## 3. Hướng Dẫn Cài Đặt & Khởi Chạy
+## 3. Hướng Dẫn Khởi Chạy
 
-### 3.1 Khởi động Database PostgreSQL
-Sử dụng Docker Compose để khởi chạy container PostgreSQL:
+### 3.1 Khởi động Database
 ```bash
 docker compose up -d
 ```
-Cơ sở dữ liệu sẽ chạy trên cổng: `localhost:5433` (tên DB: `identity_db`, user: `postgres`, password: `postgrespassword`).
 
-### 3.2 Khởi chạy Identity-Service
-Chạy trực tiếp qua Maven:
-```bash
-cd identity-service
-mvn spring-boot:run
-```
-Ứng dụng sẽ khởi động trên cổng: `http://localhost:8085`.
+### 3.2 Khởi động các Microservices
+Mở 3 terminal riêng hoặc chạy ngầm:
 
-### 3.3 Chạy Bộ Test Tự Động (Automated Tests)
-Để kiểm tra toàn diện luồng đăng nhập, sinh token, kiểm tra claims `sub`, `role`, `jti`, thời hạn token và lưu trữ database:
+1. **Khởi chạy Identity-Service**:
+   ```bash
+   cd identity-service
+   mvn spring-boot:run
+   ```
+2. **Khởi chạy Course-Service**:
+   ```bash
+   cd course-service
+   mvn spring-boot:run
+   ```
+3. **Khởi chạy Gateway-Service**:
+   ```bash
+   cd gateway-service
+   mvn spring-boot:run
+   ```
+
+### 3.3 Chạy Bộ Test Tự Động Toàn Dự Án
+Từ thư mục gốc `SS15`:
 ```bash
 mvn clean test
 ```
+Tất cả các bài kiểm thử của cả 3 services sẽ chạy và đều đạt trạng thái `SUCCESS`.
 
 ---
 
 ## 4. Hướng Dẫn Kiểm Thử Với Postman
 
-File collection đã được chuẩn bị sẵn tại: [`postman_collection.json`](postman_collection.json).
+Import file [`postman_collection.json`](postman_collection.json) vào Postman. Collection gồm 2 thư mục:
 
-### Các bước thực hiện:
-1. Mở **Postman** -> Chọn **Import** -> Chọn file `postman_collection.json`.
-2. Kiểm tra biến `baseUrl` mặc định là `http://localhost:8085`.
-3. Chạy lần lượt các request:
+### Thư mục 1: `1. Identity-Service (Auth)`
+- `1.1 Login - Student`: Đăng nhập `student` / `password123`. Trả về `accessToken` và `refreshToken`. Tự động lưu `accessToken` vào biến collection.
+- `1.2 Login - Instructor`: Đăng nhập `instructor` / `password123`. Lưu `accessTokenInstructor`.
+- `1.3 Login - Sai mật khẩu`: Nhận mã `401 Unauthorized`.
+- `1.4 Refresh Token`: Đổi `refreshToken` lấy cặp token mới.
 
-#### Request 1: `POST /api/auth/login` - Tài khoản Student
-- **Body**:
-  ```json
-  {
-      "username": "student",
-      "password": "password123"
-  }
-  ```
-- **Response mẫu (200 OK)**:
-  ```json
-  {
-      "accessToken": "eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiU1RVREVOVCIsImlkIjozLCJqdGkiOiIzODcxMTQ1Zi1kMDhkLTQ3OTMtODRlMi04MjU1ZjcyMDM1MzgiLCJlbWFpbCI6InN0dWRlbnRAZXhhbXBsZS5jb20iLCJzdWIiOiJzdHVkZW50IiwiaWF0IjoxNzkxMTY5MjEyLCJleHAiOjE3OTExNzAxMTJ9.mgF2SLT1W4T6VdnCoaHus_-NrcOSpSdf-lBR9N7NNno",
-      "refreshToken": "d8b129b0-2ff6-4aef-841d-64d2f724686c",
-      "tokenType": "Bearer",
-      "expiresIn": 900,
-      "username": "student",
-      "role": "STUDENT"
-  }
-  ```
-
-#### Request 2: `POST /api/auth/login` - Tài khoản Instructor
-- **Body**:
-  ```json
-  {
-      "username": "instructor",
-      "password": "password123"
-  }
-  ```
-- **Response**: Trả về `accessToken` với claim `role = INSTRUCTOR`.
-
-#### Request 3: `POST /api/auth/login` - Thử Đăng Nhập Sai Mật Khẩu
-- **Body**:
-  ```json
-  {
-      "username": "student",
-      "password": "saiMatKhau123"
-  }
-  ```
-- **Response (401 Unauthorized)**:
-  ```json
-  {
+### Thư mục 2: `2. Gateway-Service Security & Routing`
+- `2.1 GET /api/courses (Không đính kèm Token)`:
+  - **Kết quả mong đợi**: Gateway chặn ngay lập tức với mã `401 Unauthorized`.
+  - **Response body**:
+    ```json
+    {
+      "status": 401,
       "error": "Unauthorized",
-      "message": "Sai tên đăng nhập hoặc mật khẩu!",
-      "status": 401
-  }
-  ```
-
-#### Request 4: `POST /api/auth/refresh` - Cấp Lại Token Mới
-- **Body**:
-  ```json
-  {
-      "refreshToken": "{{refreshToken}}"
-  }
-  ```
-- **Response (200 OK)**: Trả về cặp Access Token và Refresh Token mới.
+      "message": "Thiếu hoặc sai định dạng Header Authorization Bearer Token!",
+      "path": "/api/courses"
+    }
+    ```
+- `2.2 GET /api/courses (Token đã hết hạn)`:
+  - **Kết quả mong đợi**: Gateway chặn ngay với mã `401 Unauthorized` ("Access Token đã hết hạn! Vui lòng đăng nhập lại.").
+- `2.3 GET /api/courses (Token sai chữ ký)`:
+  - **Kết quả mong đợi**: Gateway chặn ngay với mã `401 Unauthorized` ("Access Token sai chữ ký số!").
+- `2.4 GET /api/courses (Student Token hợp lệ)`:
+  - Header: `Authorization: Bearer {{accessToken}}`
+  - **Kết quả mong đợi**: Mã `200 OK`.
+  - **Response body**:
+    ```json
+    {
+      "courses": [ ... ],
+      "xUserRole": "STUDENT",
+      "xUserName": "student",
+      "totalCourses": 3,
+      "message": "Lấy danh sách khóa học thành công từ Course-Service!"
+    }
+    ```
+- `2.5 GET /api/courses (Instructor Token hợp lệ)`:
+  - Header: `Authorization: Bearer {{accessTokenInstructor}}`
+  - **Kết quả mong đợi**: Mã `200 OK`, `xUserRole: "INSTRUCTOR"`.
 
 ---
 
 ## 5. Kiểm Thử Trực Quan Trên jwt.io
 
-1. Copy giá trị của `accessToken` từ kết quả đăng nhập ở Postman.
-2. Mở trình duyệt và truy cập trang web [https://jwt.io](https://jwt.io).
-3. Dán token vào ô **Encoded**.
-4. Quan sát phần **Decoded**:
-
-### Header:
-```json
-{
-  "alg": "HS256"
-}
-```
-
-### Payload:
-```json
-{
-  "role": "STUDENT",
-  "id": 3,
-  "jti": "3871145f-d08d-4793-84e2-8255f7203538",
-  "email": "student@example.com",
-  "sub": "student",
-  "iat": 1791169212,
-  "exp": 1791170112
-}
-```
-
-**Đối chiếu với yêu cầu kỹ thuật**:
-- `sub`: `"student"` (Standard Claim chứa username người dùng) - **ĐẠT**
-- `role`: `"STUDENT"` (hoặc `"INSTRUCTOR"`, Private Claim chứa vai trò) - **ĐẠT**
-- `jti`: `"3871145f-d08d-4793-84e2-8255f7203538"` (JWT ID - mã định danh duy nhất của token) - **ĐẠT**
-- `exp - iat`: `1791170112 - 1791169212 = 900 giây (15 phút)` - **ĐẠT**
-
----
-
-## 6. Kiểm Tra Dữ Liệu Bảng `refresh_tokens` Trong PostgreSQL
-
-Mỗi khi người dùng đăng nhập thành công, một Refresh Token (chuỗi UUID ngẫu nhiên) với thời hạn sống 7 ngày sẽ được lưu vào bảng `refresh_tokens`.
-
-Kiểm tra bằng lệnh `docker exec`:
-```bash
-docker exec -it identity-postgres psql -U postgres -d identity_db -c "
-SELECT rt.id, rt.token, rt.expiry_date, u.username 
-FROM refresh_tokens rt 
-JOIN users u ON rt.user_id = u.id;
-"
-```
-
-**Kết quả thực tế trong database**:
-```text
- id |                token                 |         expiry_date          |  username  
-----+--------------------------------------+------------------------------+------------
-  7 | 930177ac-d5c2-470a-aae2-0b48403d1193 | 2026-10-12 03:00:39.73943+00 | student
-  8 | cdeb696c-693d-4c31-96e5-9662a9696b1d | 2026-10-12 03:00:26.96349+00 | instructor
-```
-
-Nhận xét:
-- `token`: Chuỗi UUID ngẫu nhiên.
-- `expiry_date`: Đúng 7 ngày sau thời điểm đăng nhập.
-- `username`: Liên kết chính xác với người dùng qua khóa ngoại `user_id`.
+Dán `accessToken` vào [https://jwt.io](https://jwt.io):
+- **Header**:
+  ```json
+  { "alg": "HS256" }
+  ```
+- **Payload**:
+  ```json
+  {
+    "sub": "student",
+    "role": "STUDENT",
+    "jti": "3871145f-d08d-4793-84e2-8255f7203538",
+    "iat": 1791169212,
+    "exp": 1791170112
+  }
+  ```
+- Thời gian sống `exp - iat = 900 giây` (**15 phút**).
+- Claim `role` được Gateway đọc và truyền tiếp xuống downstream qua `X-User-Role`.
