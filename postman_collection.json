@@ -1,0 +1,291 @@
+{
+	"info": {
+		"_postman_id": "87e35b71-3cb5-4f40-9a28-ee580c80d45f",
+		"name": "SS15 - Identity Service JWT & Refresh Token",
+		"description": "Collection kiểm thử xác thực Spring Security + JJWT 0.11.5 (HS256, 15 phút, sub, role, jti) và Refresh Token 7 ngày trong PostgreSQL cho Session 15",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://localhost:8085",
+			"type": "string"
+		},
+		{
+			"key": "accessToken",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "refreshToken",
+			"value": "",
+			"type": "string"
+		}
+	],
+	"item": [
+		{
+			"name": "1. Login - Student (ROLE: STUDENT)",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.test(\"Status code is 200 OK\", function () {",
+							"    pm.response.to.have.status(200);",
+							"});",
+							"",
+							"var jsonData = pm.response.json();",
+							"",
+							"pm.test(\"Response contains accessToken, refreshToken, expiresIn, role\", function () {",
+							"    pm.expect(jsonData.accessToken).to.be.a('string');",
+							"    pm.expect(jsonData.refreshToken).to.be.a('string');",
+							"    pm.expect(jsonData.tokenType).to.eql('Bearer');",
+							"    pm.expect(jsonData.expiresIn).to.eql(900);",
+							"    pm.expect(jsonData.username).to.eql('student');",
+							"    pm.expect(jsonData.role).to.eql('STUDENT');",
+							"});",
+							"",
+							"// Lưu token vào biến collection",
+							"pm.collectionVariables.set(\"accessToken\", jsonData.accessToken);",
+							"pm.collectionVariables.set(\"refreshToken\", jsonData.refreshToken);",
+							"",
+							"// Phân tích Payload của Access Token trực tiếp trong Postman",
+							"pm.test(\"JWT Payload contains sub, role, jti, exp, iat\", function () {",
+							"    var parts = jsonData.accessToken.split('.');",
+							"    pm.expect(parts.length).to.eql(3);",
+							"    var payload = JSON.parse(CryptoJS.enc.Utf8.stringify(CryptoJS.enc.Base64.parse(parts[1])));",
+							"    pm.expect(payload.sub).to.eql('student');",
+							"    pm.expect(payload.role).to.eql('STUDENT');",
+							"    pm.expect(payload.jti).to.be.a('string');",
+							"    pm.expect(payload.exp - payload.iat).to.eql(900);",
+							"});"
+						],
+						"type": "text/javascript"
+					}
+				}
+			],
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"username\": \"student\",\n    \"password\": \"password123\"\n}"
+				},
+				"url": {
+					"raw": "{{baseUrl}}/api/auth/login",
+					"host": [
+						"{{baseUrl}}"
+					],
+					"path": [
+						"api",
+						"auth",
+						"login"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "2. Login - Instructor (ROLE: INSTRUCTOR)",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.test(\"Status code is 200 OK\", function () {",
+							"    pm.response.to.have.status(200);",
+							"});",
+							"",
+							"var jsonData = pm.response.json();",
+							"",
+							"pm.test(\"Role is INSTRUCTOR and username is instructor\", function () {",
+							"    pm.expect(jsonData.username).to.eql('instructor');",
+							"    pm.expect(jsonData.role).to.eql('INSTRUCTOR');",
+							"});",
+							"",
+							"pm.test(\"JWT Payload contains role: INSTRUCTOR\", function () {",
+							"    var parts = jsonData.accessToken.split('.');",
+							"    var payload = JSON.parse(CryptoJS.enc.Utf8.stringify(CryptoJS.enc.Base64.parse(parts[1])));",
+							"    pm.expect(payload.sub).to.eql('instructor');",
+							"    pm.expect(payload.role).to.eql('INSTRUCTOR');",
+							"    pm.expect(payload.jti).to.be.a('string');",
+							"});"
+						],
+						"type": "text/javascript"
+					}
+				}
+			],
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"username\": \"instructor\",\n    \"password\": \"password123\"\n}"
+				},
+				"url": {
+					"raw": "{{baseUrl}}/api/auth/login",
+					"host": [
+						"{{baseUrl}}"
+					],
+					"path": [
+						"api",
+						"auth",
+						"login"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "3. Login - Admin (ROLE: ADMIN)",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.test(\"Status code is 200 OK\", function () {",
+							"    pm.response.to.have.status(200);",
+							"});",
+							"",
+							"var jsonData = pm.response.json();",
+							"pm.expect(jsonData.username).to.eql('admin');",
+							"pm.expect(jsonData.role).to.eql('ADMIN');"
+						],
+						"type": "text/javascript"
+					}
+				}
+			],
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"username\": \"admin\",\n    \"password\": \"password123\"\n}"
+				},
+				"url": {
+					"raw": "{{baseUrl}}/api/auth/login",
+					"host": [
+						"{{baseUrl}}"
+					],
+					"path": [
+						"api",
+						"auth",
+						"login"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "4. Login - Sai mật khẩu (Expect 401)",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.test(\"Status code is 401 Unauthorized\", function () {",
+							"    pm.response.to.have.status(401);",
+							"});",
+							"",
+							"var jsonData = pm.response.json();",
+							"pm.test(\"Error message is accurate\", function () {",
+							"    pm.expect(jsonData.status).to.eql(401);",
+							"    pm.expect(jsonData.error).to.eql('Unauthorized');",
+							"    pm.expect(jsonData.message).to.eql('Sai tên đăng nhập hoặc mật khẩu!');",
+							"});"
+						],
+						"type": "text/javascript"
+					}
+				}
+			],
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"username\": \"student\",\n    \"password\": \"saiMatKhau123\"\n}"
+				},
+				"url": {
+					"raw": "{{baseUrl}}/api/auth/login",
+					"host": [
+						"{{baseUrl}}"
+					],
+					"path": [
+						"api",
+						"auth",
+						"login"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "5. Refresh Token - Cấp cặp Token mới",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.test(\"Status code is 200 OK\", function () {",
+							"    pm.response.to.have.status(200);",
+							"});",
+							"",
+							"var jsonData = pm.response.json();",
+							"pm.test(\"Got new access and refresh token\", function () {",
+							"    pm.expect(jsonData.accessToken).to.be.a('string');",
+							"    pm.expect(jsonData.refreshToken).to.be.a('string');",
+							"    pm.expect(jsonData.username).to.eql('student');",
+							"});"
+						],
+						"type": "text/javascript"
+					}
+				}
+			],
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"refreshToken\": \"{{refreshToken}}\"\n}"
+				},
+				"url": {
+					"raw": "{{baseUrl}}/api/auth/refresh",
+					"host": [
+						"{{baseUrl}}"
+					],
+					"path": [
+						"api",
+						"auth",
+						"refresh"
+					]
+				}
+			},
+			"response": []
+		}
+	]
+}
