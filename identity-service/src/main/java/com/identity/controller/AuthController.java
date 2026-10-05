@@ -70,29 +70,12 @@ public class AuthController {
 
     /**
      * API POST /api/auth/refresh
-     * Cấp mới Access Token và Refresh Token từ Refresh Token hợp lệ
+     * Cấp mới Access Token và Refresh Token từ Refresh Token hợp lệ (Cơ chế Token Rotation)
+     * Nếu token không hợp lệ hoặc đã bị xoay vòng -> ném TokenRefreshException (403 Forbidden)
      */
     @PostMapping("/refresh")
     public ResponseEntity<?> refreshToken(@Valid @RequestBody TokenRefreshRequest request) {
-        String requestRefreshToken = request.getRefreshToken();
-        var tokenOpt = refreshTokenService.findByToken(requestRefreshToken);
-
-        if (tokenOpt.isEmpty()) {
-            return ResponseEntity.badRequest().body(new MessageResponse("Refresh token không tồn tại trong cơ sở dữ liệu!"));
-        }
-
-        RefreshToken refreshToken = refreshTokenService.verifyExpiration(tokenOpt.get());
-        User user = refreshToken.getUser();
-
-        String accessToken = jwtUtils.generateAccessToken(user);
-        RefreshToken newRefreshToken = refreshTokenService.createRefreshToken(user.getId());
-
-        return ResponseEntity.ok(new TokenResponse(
-                accessToken,
-                newRefreshToken.getToken(),
-                900L,
-                user.getUsername(),
-                user.getPrimaryRole()
-        ));
+        TokenResponse response = refreshTokenService.refreshTokenRotation(request.getRefreshToken());
+        return ResponseEntity.ok(response);
     }
 }

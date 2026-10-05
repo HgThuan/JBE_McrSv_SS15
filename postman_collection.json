@@ -32,6 +32,11 @@
 			"type": "string"
 		},
 		{
+			"key": "oldRefreshToken",
+			"value": "",
+			"type": "string"
+		},
+		{
 			"key": "expiredToken",
 			"value": "eyJhbGciOiAiSFMyNTYiLCAidHlwIjogIkpXVCJ9.eyJzdWIiOiAic3R1ZGVudCIsICJyb2xlIjogIlNUVURFTlQiLCAianRpIjogImV4cGlyZWQtdXVpZC0xMjM0IiwgImlhdCI6IDE3OTExNjQxODcsICJleHAiOiAxNzkxMTY3Nzg3fQ.VFf4ijPWGkuv12YyFzXYi4aUlkXYl_KCx_8pWdBpCIg",
 			"type": "string"
@@ -194,7 +199,7 @@
 					"response": []
 				},
 				{
-					"name": "1.4 Refresh Token",
+					"name": "1.4 Refresh Token (Lần 1 - Token Rotation thành công)",
 					"event": [
 						{
 							"listen": "test",
@@ -205,7 +210,10 @@
 									"});",
 									"var jsonData = pm.response.json();",
 									"pm.expect(jsonData.accessToken).to.be.a('string');",
-									"pm.expect(jsonData.refreshToken).to.be.a('string');"
+									"pm.expect(jsonData.refreshToken).to.be.a('string');",
+									"// Lưu token cũ để kiểm thử Replay Attack ở request 1.5",
+									"pm.collectionVariables.set(\"oldRefreshToken\", pm.collectionVariables.get(\"refreshToken\"));",
+									"pm.collectionVariables.set(\"refreshToken\", jsonData.refreshToken);"
 								],
 								"type": "text/javascript"
 							}
@@ -222,6 +230,51 @@
 						"body": {
 							"mode": "raw",
 							"raw": "{\n    \"refreshToken\": \"{{refreshToken}}\"\n}"
+						},
+						"url": {
+							"raw": "{{gatewayUrl}}/api/auth/refresh",
+							"host": [
+								"{{gatewayUrl}}"
+							],
+							"path": [
+								"api",
+								"auth",
+								"refresh"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "1.5 Refresh Token (Lần 2 - Gửi lại Token cũ -> Chặn 403 Forbidden)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Status code is 403 Forbidden do token đã bị xoay vòng\", function () {",
+									"    pm.response.to.have.status(403);",
+									"});",
+									"var jsonData = pm.response.json();",
+									"pm.expect(jsonData.status).to.eql(403);",
+									"pm.expect(jsonData.error).to.eql(\"Forbidden\");",
+									"pm.expect(jsonData.message).to.include(\"thu hồi/xoay vòng\");"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"refreshToken\": \"{{oldRefreshToken}}\"\n}"
 						},
 						"url": {
 							"raw": "{{gatewayUrl}}/api/auth/refresh",

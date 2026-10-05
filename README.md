@@ -146,3 +146,21 @@ Import file [`postman_collection.json`](postman_collection.json) vào Postman:
 5. Chạy request **2.5 POST /api/courses (INSTRUCTOR tạo khóa học)**:
    - Header: `Authorization: Bearer {{accessTokenInstructor}}`
    - **Kết quả**: Mã **201 Created**, khóa học mới được thêm vào danh sách thành công.
+
+### 4.2 Quy trình kiểm thử Token Rotation & Chặn Token Cũ (403 Forbidden - Bài 4)
+1. Chạy request **1.1 Login - Student**:
+   - Nhận cặp Access Token và Refresh Token ban đầu (lưu vào biến `refreshToken`).
+2. Chạy request **1.4 Refresh Token (Lần 1 - Token Rotation thành công)**:
+   - Body: `{"refreshToken": "{{refreshToken}}"}`
+   - **Kết quả**: Mã `200 OK`, trả về cặp Access Token và Refresh Token mới.
+   - Script tự động lưu Refresh Token cũ vào `oldRefreshToken` và cập nhật `refreshToken` mới.
+3. Chạy request **1.5 Refresh Token (Lần 2 - Gửi lại Token cũ)**:
+   - Body: `{"refreshToken": "{{oldRefreshToken}}"}`
+   - **Kết quả thực tế**: Mã lỗi **403 Forbidden**:
+     ```json
+     {
+       "status": 403,
+       "error": "Forbidden",
+       "message": "Lỗi Refresh Token [...]: Refresh token không tồn tại trong DB hoặc đã bị thu hồi/xoay vòng!"
+     }
+     ```

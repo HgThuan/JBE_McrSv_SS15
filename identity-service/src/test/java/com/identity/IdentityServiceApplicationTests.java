@@ -173,4 +173,66 @@ class IdentityServiceApplicationTests {
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.message").value("Sai tên đăng nhập hoặc mật khẩu!"));
     }
+
+    @Test
+    @DisplayName("6. Gửi Refresh Token hợp lệ vào /refresh -> Nhận cặp Token mới (Token Rotation)")
+    void testRefreshTokenRotationSuccess() throws Exception {
+        // 1. Đăng nhập lấy token ban đầu
+        LoginRequest loginRequest = new LoginRequest("student", "password123");
+        MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(loginRequest)))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        String refreshToken1 = objectMapper.readTree(loginResult.getResponse().getContentAsString())
+                .get("refreshToken").asText();
+
+        // 2. Gửi Refresh Token vào /refresh
+        String refreshPayload = String.format("{\"refreshToken\":\"%s\"}", refreshToken1);
+        MvcResult refreshResult = mockMvc.perform(post("/api/auth/refresh")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(refreshPayload))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.accessToken").isNotEmpty())
+                .andExpect(jsonPath("$.refreshToken").isNotEmpty())
+                .andExpect(jsonPath("$.tokenType").value("Bearer"))
+                .andReturn();
+
+        String refreshToken2 = objectMapper.readTree(refreshResult.getResponse().getContentAsString())
+                .get("refreshToken").asText();
+
+        assertNotEquals(refreshToken1, refreshToken2, "Refresh Token mới phải khác Refresh Token cũ");
+    }
+
+    @Test
+    @DisplayName("7. Gửi lại chính Refresh Token cũ đã bị xoay vòng -> Hệ thống từ chối với mã 403 Forbidden")
+    void testRefreshTokenRotationReuseFailsWith403() throws Exception {
+        // 1. Đăng nhập lấy token
+        LoginRequest loginRequest = new LoginRequest("student", "password123");
+        MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(loginRequest)))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        String refreshTokenOld = objectMapper.readTree(loginResult.getResponse().getContentAsString())
+                .get("refreshToken").asText();
+
+        // 2. Xoay vòng lần 1 -> Thành công
+        String refreshPayload = String.format("{\"refreshToken\":\"%s\"}", refreshTokenOld);
+        mockMvc.perform(post("/api/auth/refresh")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(refreshPayload))
+                .andExpect(status().isOk());
+
+        // 3. Gửi lại chính Refresh Token cũ đó một lần nữa -> Hệ thống từ chối (403)
+        mockMvc.perform(post("/api/auth/refresh")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(refreshPayload))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.error").value("Forbidden"))
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("Refresh token không tồn tại trong DB hoặc đã bị thu hồi/xoay vòng!")));
+    }
 }

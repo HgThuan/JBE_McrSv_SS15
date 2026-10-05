@@ -1,9 +1,12 @@
 package com.identity.security.services;
 
+import com.identity.dto.response.TokenResponse;
+import com.identity.exception.TokenRefreshException;
 import com.identity.model.RefreshToken;
 import com.identity.model.User;
 import com.identity.repository.RefreshTokenRepository;
 import com.identity.repository.UserRepository;
+import com.identity.security.jwt.JwtUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -25,8 +28,49 @@ public class RefreshTokenService {
     @Autowired
     private UserRepository userRepository;
 
+    @Autowired
+    private JwtUtils jwtUtils;
+
     public Optional<RefreshToken> findByToken(String token) {
         return refreshTokenRepository.findByToken(token);
+    }
+
+    /**
+     * Cơ chế Token Rotation:
+     * 1. Tìm Refresh Token trong DB. Nếu không tồn tại -> ném TokenRefreshException (403 Forbidden).
+     * 2. Nếu đã hết hạn -> ném TokenRefreshException (403 Forbidden).
+     * 3. Xoay vòng (Rotation): thay thế token cũ bằng token ngẫu nhiên mới trong DB.
+     * 4. Sinh Access Token mới và trả về cặp Token mới cho Client.
+     */
+    @Transactional
+    public TokenResponse refreshTokenRotation(String requestToken) {
+        RefreshToken tokenRecord = refreshTokenRepository.findByToken(requestToken)
+                .orElseThrow(() -> new TokenRefreshException(requestToken,
+                        "Refresh token không tồn tại trong DB hoặc đã bị thu hồi/xoay vòng!"));
+
+        if (tokenRecord.getExpiryDate().compareTo(Instant.now()) < 0) {
+            refreshTokenRepository.delete(tokenRecord);
+            throw new TokenRefreshException(requestToken, "Refresh token đã hết hạn! Vui lòng đăng nhập lại.");
+        }
+
+        User user = tokenRecord.getUser();
+
+        // 3. Thực hiện Token Rotation: Xóa/thay thế giá trị token cũ trong DB
+        String newRefreshTokenString = UUID.randomUUID().toString();
+        tokenRecord.setToken(newRefreshTokenString);
+        tokenRecord.setExpiryDate(Instant.now().plusMillis(refreshTokenDurationMs));
+        refreshTokenRepository.save(tokenRecord);
+
+        // 4. Sinh Access Token mới
+        String newAccessToken = jwtUtils.generateAccessToken(user);
+
+        return new TokenResponse(
+                newAccessToken,
+                newRefreshTokenString,
+                900L,
+                user.getUsername(),
+                user.getPrimaryRole()
+        );
     }
 
     /**
